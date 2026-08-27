@@ -19,6 +19,14 @@ const int MOT_A_ENCODER_B = 22;
 const int MOT_B_ENCODER_A = 19;
 const int MOT_B_ENCODER_B = 21;
 
+// Battery voltage monitoring
+const int BATTERY_PIN = 34;
+const int LOW_BATTERY_LED_PIN = 2;
+const float BATTERY_VOLTAGE_DIVIDER_FACTOR = 2.8;
+const float LOW_BATTERY_THRESHOLD_V = 3.3;
+const float ADC_MAX_VALUE = 4095.0;
+const float ADC_LOGIC_LEVEL_V = 3.3;
+
 // ArduPID requires doubles for all inputs/outputs. Setpoints/inputs are signed encoder ticks per control interval.
 double setpointA = 0, inputA = 0, outputA = 0;
 double setpointB = 0, inputB = 0, outputB = 0;
@@ -53,10 +61,23 @@ void motors(int speedA, int speedB) {
   }
 }
 
+void measure_battery() {
+  float adc_voltage = (analogRead(BATTERY_PIN) / ADC_MAX_VALUE) * ADC_LOGIC_LEVEL_V;
+  float battery_voltage = adc_voltage * BATTERY_VOLTAGE_DIVIDER_FACTOR;
+  Serial.print("battery_V:"); Serial.print(battery_voltage);
+  if (battery_voltage < LOW_BATTERY_THRESHOLD_V) {
+    digitalWrite(LOW_BATTERY_LED_PIN, HIGH);
+    Serial.println(" WARNING: LOW BATTERY!");
+  } else {
+    digitalWrite(LOW_BATTERY_LED_PIN, LOW);
+    Serial.println();
+  }
+}
+
 void controlTask(void *pvParameters) {
   (void) pvParameters;
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(40);
+  const TickType_t xFrequency = pdMS_TO_TICKS(50); // 50 ms control interval
 
   long prevCountA = 0;
   long prevCountB = 0;
@@ -86,6 +107,9 @@ void setup() {
   pinMode(MOTOR_B_DIRECTION_PIN, OUTPUT);
   pinMode(MOTOR_B_PWM_PIN, OUTPUT);
   motors(0, 0);
+
+  pinMode(LOW_BATTERY_LED_PIN, OUTPUT);
+  digitalWrite(LOW_BATTERY_LED_PIN, LOW);
 
   ESP32Encoder::useInternalWeakPullResistors = puType::up;
   encoderA.attachFullQuad(MOT_A_ENCODER_A, MOT_A_ENCODER_B);
@@ -133,13 +157,17 @@ void loop() {
     }
   }
 
+
+
   // Use Serial Plotter (Ctrl+Shift+L) to visualize
   Serial.print("setP_A:");  Serial.print(setpointA); Serial.print(",");
   Serial.print("input_A:"); Serial.print(inputA);    Serial.print(",");
   Serial.print("output_A:"); Serial.print(outputA);  Serial.print(",");
   Serial.print("setP_B:");  Serial.print(setpointB); Serial.print(",");
   Serial.print("input_B:"); Serial.print(inputB);    Serial.print(",");
-  Serial.print("output_B:"); Serial.println(outputB);
+  Serial.print("output_B:"); Serial.println(outputB);  
 
-  delay(100);
+  measure_battery();
+
+  delay(50);
 }
