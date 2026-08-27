@@ -23,7 +23,7 @@ const int MOT_B_ENCODER_B = 21;
 const int BATTERY_PIN = 34;
 const int LOW_BATTERY_LED_PIN = 2;
 const float BATTERY_VOLTAGE_DIVIDER_FACTOR = 2.8;
-const float LOW_BATTERY_THRESHOLD_V = 3.3;
+const float LOW_BATTERY_THRESHOLD_V = 6.6; //2S battery low voltage threshold - 3.3V per cell
 const float ADC_MAX_VALUE = 4095.0;
 const float ADC_LOGIC_LEVEL_V = 3.3;
 

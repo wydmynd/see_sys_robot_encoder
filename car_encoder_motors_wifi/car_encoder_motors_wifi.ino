@@ -8,8 +8,8 @@
 #include <WebSerial.h>
 
 // WiFi credentials
-const char* ssid = "3D-printer"; // Your WiFi SSID
-const char* password = "3d-print"; // Your WiFi Password
+const char *ssid = "...";    // Your WiFi SSID
+const char *password = "........";  // Your WiFi Password
 
 AsyncWebServer server(80);
 
@@ -33,7 +33,7 @@ const int MOT_B_ENCODER_B = 21;
 const int BATTERY_PIN = 34;
 const int LOW_BATTERY_LED_PIN = 2;
 const float BATTERY_VOLTAGE_DIVIDER_FACTOR = 2.8;
-const float LOW_BATTERY_THRESHOLD_V = 3.3;
+const float LOW_BATTERY_THRESHOLD_V = 6.6; //2S battery low voltage threshold - 3.3V per cell
 const float ADC_MAX_VALUE = 4095.0;
 const float ADC_LOGIC_LEVEL_V = 3.3;
 
@@ -49,6 +49,9 @@ double i = 0.001;
 double d = 0.05;
 
 const int SPEED_DEADBAND = 35;
+
+const unsigned long WEBSERIAL_PRINT_INTERVAL_MS = 250;
+unsigned long last_webserial_print_time = 0;
 
 void motors(int speedA, int speedB) {
   if (abs(speedA) < SPEED_DEADBAND) speedA = 0;
@@ -71,20 +74,44 @@ void motors(int speedA, int speedB) {
   }
 }
 
-void measure_battery() {
+// Reads battery voltage, updates the low-battery LED, and logs to Serial. Returns the voltage for WebSerial logging.
+float measure_battery() {
   float adc_voltage = (analogRead(BATTERY_PIN) / ADC_MAX_VALUE) * ADC_LOGIC_LEVEL_V;
   float battery_voltage = adc_voltage * BATTERY_VOLTAGE_DIVIDER_FACTOR;
-  Serial.print("battery_V:"); Serial.print(battery_voltage);
-  WebSerial.print("battery_V:"); WebSerial.print(battery_voltage);
+  Serial.print("battery_V:");
+  Serial.print(battery_voltage);
   if (battery_voltage < LOW_BATTERY_THRESHOLD_V) {
     digitalWrite(LOW_BATTERY_LED_PIN, HIGH);
     Serial.println(" WARNING: LOW BATTERY!");
-    WebSerial.println(" WARNING: LOW BATTERY!");
   } else {
     digitalWrite(LOW_BATTERY_LED_PIN, LOW);
     Serial.println();
-    WebSerial.println();
   }
+  return battery_voltage;
+}
+
+// Logs telemetry to WebSerial; called at most every WEBSERIAL_PRINT_INTERVAL_MS.
+void log_webserial_telemetry(float battery_voltage) {
+  WebSerial.print("setP_A:");
+  WebSerial.print(setpointA);
+  WebSerial.print(",");
+  WebSerial.print("input_A:");
+  WebSerial.print(inputA);
+  WebSerial.print(",");
+  WebSerial.print("output_A:");
+  WebSerial.print(outputA);
+  WebSerial.print(",");
+  WebSerial.print("setP_B:");
+  WebSerial.print(setpointB);
+  WebSerial.print(",");
+  WebSerial.print("input_B:");
+  WebSerial.print(inputB);
+  WebSerial.print(",");
+  WebSerial.print("output_B:");
+  WebSerial.print(outputB);
+  WebSerial.print(",");
+  WebSerial.print("battery_V:");
+  WebSerial.println(battery_voltage);
 }
 
 // Parses a velocity setpoint command ("A:<value>" or "B:<value>") from either Serial or WebSerial.
@@ -92,21 +119,25 @@ void handleCommand(String cmd) {
   cmd.trim();
   if (cmd.startsWith("A:")) {
     setpointA = cmd.substring(2).toDouble();
-    Serial.print("Setpoint A updated: "); Serial.println(setpointA);
-    WebSerial.print("Setpoint A updated: "); WebSerial.println(setpointA);
-    setpointA *= -1.0; // Invert direction to match physical robot
+    Serial.print("Setpoint A updated: ");
+    Serial.println(setpointA);
+    WebSerial.print("Setpoint A updated: ");
+    WebSerial.println(setpointA);
+    setpointA *= -1.0;  // Invert direction to match physical robot
   } else if (cmd.startsWith("B:")) {
     setpointB = cmd.substring(2).toDouble();
-    Serial.print("Setpoint B updated: "); Serial.println(setpointB);
-    WebSerial.print("Setpoint B updated: "); WebSerial.println(setpointB);
-    setpointB *= -1.0; // Invert direction to match physical robot
+    Serial.print("Setpoint B updated: ");
+    Serial.println(setpointB);
+    WebSerial.print("Setpoint B updated: ");
+    WebSerial.println(setpointB);
+    setpointB *= -1.0;  // Invert direction to match physical robot
   }
 }
 
 void controlTask(void *pvParameters) {
-  (void) pvParameters;
+  (void)pvParameters;
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(50); // 50 ms control interval
+  const TickType_t xFrequency = pdMS_TO_TICKS(50);  // 50 ms control interval
 
   long prevCountA = 0;
   long prevCountB = 0;
@@ -131,12 +162,22 @@ void controlTask(void *pvParameters) {
 void setup() {
   Serial.begin(115200);
 
+  pinMode(MOTOR_A_DIRECTION_PIN, OUTPUT);
+  pinMode(MOTOR_A_PWM_PIN, OUTPUT);
+  pinMode(MOTOR_B_DIRECTION_PIN, OUTPUT);
+  pinMode(MOTOR_B_PWM_PIN, OUTPUT);
+  motors(0, 0);
+
+  pinMode(LOW_BATTERY_LED_PIN, OUTPUT);
+  digitalWrite(LOW_BATTERY_LED_PIN, LOW);
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   if (WiFi.waitForConnectResult() != WL_CONNECTED) {
     Serial.println("WiFi Failed!");
   } else {
-    Serial.print("IP Address: "); Serial.println(WiFi.localIP());
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
   }
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -152,14 +193,7 @@ void setup() {
   });
   server.begin();
 
-  pinMode(MOTOR_A_DIRECTION_PIN, OUTPUT);
-  pinMode(MOTOR_A_PWM_PIN, OUTPUT);
-  pinMode(MOTOR_B_DIRECTION_PIN, OUTPUT);
-  pinMode(MOTOR_B_PWM_PIN, OUTPUT);
-  motors(0, 0);
 
-  pinMode(LOW_BATTERY_LED_PIN, OUTPUT);
-  digitalWrite(LOW_BATTERY_LED_PIN, LOW);
 
   ESP32Encoder::useInternalWeakPullResistors = puType::up;
   encoderA.attachFullQuad(MOT_A_ENCODER_A, MOT_A_ENCODER_B);
@@ -171,7 +205,7 @@ void setup() {
   controllerA.begin(&inputA, &outputA, &setpointA, p, i, d);
   controllerB.begin(&inputB, &outputB, &setpointB, p, i, d);
 
-  controllerA.setOutputLimits(-120, 120); //limit speed for development
+  controllerA.setOutputLimits(-120, 120);  //limit speed for development
   controllerB.setOutputLimits(-120, 120);
 
   controllerA.start();
@@ -179,13 +213,13 @@ void setup() {
 
   // Create closed-loop velocity control RTOS task (runs independently)
   xTaskCreatePinnedToCore(
-    controlTask,     // Task function
-    "PID_Task",      // Name
-    4096,            // Stack size in words
-    NULL,            // Parameter
-    1,               // Priority
-    NULL,            // Task handle
-    1                // Run on core 1
+    controlTask,  // Task function
+    "PID_Task",   // Name
+    4096,         // Stack size in words
+    NULL,         // Parameter
+    1,            // Priority
+    NULL,         // Task handle
+    1             // Run on core 1
   );
 
   Serial.println("Closed-loop velocity control task started. Encoders ready.");
@@ -198,21 +232,30 @@ void loop() {
   }
 
   // Use Serial Plotter (Ctrl+Shift+L) to visualize
-  Serial.print("setP_A:");  Serial.print(setpointA); Serial.print(",");
-  Serial.print("input_A:"); Serial.print(inputA);    Serial.print(",");
-  Serial.print("output_A:"); Serial.print(outputA);  Serial.print(",");
-  Serial.print("setP_B:");  Serial.print(setpointB); Serial.print(",");
-  Serial.print("input_B:"); Serial.print(inputB);    Serial.print(",");
-  Serial.print("output_B:"); Serial.println(outputB);
+  Serial.print("setP_A:");
+  Serial.print(setpointA);
+  Serial.print(",");
+  Serial.print("input_A:");
+  Serial.print(inputA);
+  Serial.print(",");
+  Serial.print("output_A:");
+  Serial.print(outputA);
+  Serial.print(",");
+  Serial.print("setP_B:");
+  Serial.print(setpointB);
+  Serial.print(",");
+  Serial.print("input_B:");
+  Serial.print(inputB);
+  Serial.print(",");
+  Serial.print("output_B:");
+  Serial.println(outputB);
 
-  WebSerial.print("setP_A:");  WebSerial.print(setpointA); WebSerial.print(",");
-  WebSerial.print("input_A:"); WebSerial.print(inputA);    WebSerial.print(",");
-  WebSerial.print("output_A:"); WebSerial.print(outputA);  WebSerial.print(",");
-  WebSerial.print("setP_B:");  WebSerial.print(setpointB); WebSerial.print(",");
-  WebSerial.print("input_B:"); WebSerial.print(inputB);    WebSerial.print(",");
-  WebSerial.print("output_B:"); WebSerial.println(outputB);
+  float battery_voltage = measure_battery();
 
-  measure_battery();
+  if (millis() - last_webserial_print_time >= WEBSERIAL_PRINT_INTERVAL_MS) {
+    last_webserial_print_time = millis();
+    log_webserial_telemetry(battery_voltage);
+  }
 
   WebSerial.loop();
 
