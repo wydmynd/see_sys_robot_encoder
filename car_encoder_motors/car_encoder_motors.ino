@@ -30,7 +30,12 @@ double p = 0.4;
 double i = 0.001;
 double d = 0.05;
 
+const int SPEED_DEADBAND = 35;
+
 void motors(int speedA, int speedB) {
+  if (abs(speedA) < SPEED_DEADBAND) speedA = 0;
+  if (abs(speedB) < SPEED_DEADBAND) speedB = 0;
+
   if (speedA >= 0) {
     analogWrite(MOTOR_A_PWM_PIN, speedA);
     digitalWrite(MOTOR_A_DIRECTION_PIN, LOW);
@@ -92,8 +97,8 @@ void setup() {
   controllerA.begin(&inputA, &outputA, &setpointA, p, i, d);
   controllerB.begin(&inputB, &outputB, &setpointB, p, i, d);
 
-  controllerA.setOutputLimits(-255, 255);
-  controllerB.setOutputLimits(-255, 255);
+  controllerA.setOutputLimits(-120, 120); //limit speed for development
+  controllerB.setOutputLimits(-120, 120);
 
   controllerA.start();
   controllerB.start();
@@ -120,9 +125,11 @@ void loop() {
     if (cmd.startsWith("A:")) {
       setpointA = cmd.substring(2).toDouble();
       Serial.print("Setpoint A updated: "); Serial.println(setpointA);
+      setpointA*= -1.0; // Invert direction to match physical robot 
     } else if (cmd.startsWith("B:")) {
       setpointB = cmd.substring(2).toDouble();
       Serial.print("Setpoint B updated: "); Serial.println(setpointB);
+      setpointB*= -1.0; // Invert direction to match physical robot
     }
   }
 
