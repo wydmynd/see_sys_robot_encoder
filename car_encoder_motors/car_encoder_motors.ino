@@ -1,4 +1,5 @@
 #include <ESP32Encoder.h>
+#include <ArduPID.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -18,6 +19,17 @@ const int MOT_A_ENCODER_B = 22;
 const int MOT_B_ENCODER_A = 19;
 const int MOT_B_ENCODER_B = 21;
 
+// ArduPID requires doubles for all inputs/outputs. Setpoints/inputs are signed encoder ticks per control interval.
+double setpointA = 0, inputA = 0, outputA = 0;
+double setpointB = 0, inputB = 0, outputB = 0;
+
+ArduPID controllerA;
+ArduPID controllerB;
+
+double p = 0.4;
+double i = 0.001;
+double d = 0.05;
+
 void motors(int speedA, int speedB) {
   if (speedA >= 0) {
     analogWrite(MOTOR_A_PWM_PIN, speedA);
@@ -36,44 +48,28 @@ void motors(int speedA, int speedB) {
   }
 }
 
-void motorTask(void *pvParameters) {
+void controlTask(void *pvParameters) {
   (void) pvParameters;
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = pdMS_TO_TICKS(40);
+
+  long prevCountA = 0;
+  long prevCountB = 0;
+
   for (;;) {
-    Serial.println("motor_A_FWD");
-    motors(180, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    motors(0, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    long currCountA = (long)encoderA.getCount();
+    inputA = (double)(currCountA - prevCountA);
+    prevCountA = currCountA;
+    controllerA.compute();
 
-    Serial.println("motor_A_BWD");
-    motors(-180, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    motors(0, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    long currCountB = (long)encoderB.getCount();
+    inputB = (double)(currCountB - prevCountB);
+    prevCountB = currCountB;
+    controllerB.compute();
 
-    Serial.println("motor_B_FWD");
-    motors(0, 180);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    motors(0, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    motors((int)outputA, (int)outputB);
 
-    Serial.println("motor_B_BWD");
-    motors(0, -180);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    motors(0, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    Serial.println("motors_FWD");
-    motors(80, 80);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    motors(0, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    Serial.println("motors_BWD");
-    motors(-80, -80);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    motors(0, 0);
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 
@@ -92,26 +88,51 @@ void setup() {
   encoderB.attachFullQuad(MOT_B_ENCODER_A, MOT_B_ENCODER_B);
   encoderB.clearCount();
 
-  // Create motor control RTOS task (runs independently)
+  // ArduPID Initialization
+  controllerA.begin(&inputA, &outputA, &setpointA, p, i, d);
+  controllerB.begin(&inputB, &outputB, &setpointB, p, i, d);
+
+  controllerA.setOutputLimits(-255, 255);
+  controllerB.setOutputLimits(-255, 255);
+
+  controllerA.start();
+  controllerB.start();
+
+  // Create closed-loop velocity control RTOS task (runs independently)
   xTaskCreatePinnedToCore(
-    motorTask,       // Task function
-    "MotorTask",     // Name
-    2048,            // Stack size in words
+    controlTask,     // Task function
+    "PID_Task",      // Name
+    4096,            // Stack size in words
     NULL,            // Parameter
     1,               // Priority
     NULL,            // Task handle
     1                // Run on core 1
   );
 
-  Serial.println("Motor control task started. Encoders ready.");
+  Serial.println("Closed-loop velocity control task started. Encoders ready.");
 }
 
 void loop() {
-  long countA = encoderA.getCount();
-  long countB = encoderB.getCount();
-  Serial.print("A:");
-  Serial.print(countA);
-  Serial.print(",B:");
-  Serial.println(countB);
-  delay(50);
+  // Serial command parser for velocity setpoints (ticks per 40 ms control interval)
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.startsWith("A:")) {
+      setpointA = cmd.substring(2).toDouble();
+      Serial.print("Setpoint A updated: "); Serial.println(setpointA);
+    } else if (cmd.startsWith("B:")) {
+      setpointB = cmd.substring(2).toDouble();
+      Serial.print("Setpoint B updated: "); Serial.println(setpointB);
+    }
+  }
+
+  // Use Serial Plotter (Ctrl+Shift+L) to visualize
+  Serial.print("setP_A:");  Serial.print(setpointA); Serial.print(",");
+  Serial.print("input_A:"); Serial.print(inputA);    Serial.print(",");
+  Serial.print("output_A:"); Serial.print(outputA);  Serial.print(",");
+  Serial.print("setP_B:");  Serial.print(setpointB); Serial.print(",");
+  Serial.print("input_B:"); Serial.print(inputB);    Serial.print(",");
+  Serial.print("output_B:"); Serial.println(outputB);
+
+  delay(100);
 }
