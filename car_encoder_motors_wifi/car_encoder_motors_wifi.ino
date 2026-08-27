@@ -2,6 +2,16 @@
 #include <ArduPID.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <WebSerial.h>
+
+// WiFi credentials
+const char* ssid = "3D-printer"; // Your WiFi SSID
+const char* password = "3d-print"; // Your WiFi Password
+
+AsyncWebServer server(80);
 
 ESP32Encoder encoderA;
 ESP32Encoder encoderB;
@@ -65,12 +75,31 @@ void measure_battery() {
   float adc_voltage = (analogRead(BATTERY_PIN) / ADC_MAX_VALUE) * ADC_LOGIC_LEVEL_V;
   float battery_voltage = adc_voltage * BATTERY_VOLTAGE_DIVIDER_FACTOR;
   Serial.print("battery_V:"); Serial.print(battery_voltage);
+  WebSerial.print("battery_V:"); WebSerial.print(battery_voltage);
   if (battery_voltage < LOW_BATTERY_THRESHOLD_V) {
     digitalWrite(LOW_BATTERY_LED_PIN, HIGH);
     Serial.println(" WARNING: LOW BATTERY!");
+    WebSerial.println(" WARNING: LOW BATTERY!");
   } else {
     digitalWrite(LOW_BATTERY_LED_PIN, LOW);
     Serial.println();
+    WebSerial.println();
+  }
+}
+
+// Parses a velocity setpoint command ("A:<value>" or "B:<value>") from either Serial or WebSerial.
+void handleCommand(String cmd) {
+  cmd.trim();
+  if (cmd.startsWith("A:")) {
+    setpointA = cmd.substring(2).toDouble();
+    Serial.print("Setpoint A updated: "); Serial.println(setpointA);
+    WebSerial.print("Setpoint A updated: "); WebSerial.println(setpointA);
+    setpointA *= -1.0; // Invert direction to match physical robot
+  } else if (cmd.startsWith("B:")) {
+    setpointB = cmd.substring(2).toDouble();
+    Serial.print("Setpoint B updated: "); Serial.println(setpointB);
+    WebSerial.print("Setpoint B updated: "); WebSerial.println(setpointB);
+    setpointB *= -1.0; // Invert direction to match physical robot
   }
 }
 
@@ -101,6 +130,27 @@ void controlTask(void *pvParameters) {
 
 void setup() {
   Serial.begin(115200);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  if (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("WiFi Failed!");
+  } else {
+    Serial.print("IP Address: "); Serial.println(WiFi.localIP());
+  }
+
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Robot control. Open http://" + WiFi.localIP().toString() + "/webserial");
+  });
+
+  // WebSerial terminal available at http://<IPAddress>/webserial
+  WebSerial.begin(&server);
+  WebSerial.onMessage([&](uint8_t *data, size_t len) {
+    String cmd = "";
+    for (size_t idx = 0; idx < len; idx++) cmd += char(data[idx]);
+    handleCommand(cmd);
+  });
+  server.begin();
 
   pinMode(MOTOR_A_DIRECTION_PIN, OUTPUT);
   pinMode(MOTOR_A_PWM_PIN, OUTPUT);
@@ -144,20 +194,8 @@ void setup() {
 void loop() {
   // Serial command parser for velocity setpoints (ticks per 40 ms control interval)
   if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
-    if (cmd.startsWith("A:")) {
-      setpointA = cmd.substring(2).toDouble();
-      Serial.print("Setpoint A updated: "); Serial.println(setpointA);
-      setpointA*= -1.0; // Invert direction to match physical robot 
-    } else if (cmd.startsWith("B:")) {
-      setpointB = cmd.substring(2).toDouble();
-      Serial.print("Setpoint B updated: "); Serial.println(setpointB);
-      setpointB*= -1.0; // Invert direction to match physical robot
-    }
+    handleCommand(Serial.readStringUntil('\n'));
   }
-
-
 
   // Use Serial Plotter (Ctrl+Shift+L) to visualize
   Serial.print("setP_A:");  Serial.print(setpointA); Serial.print(",");
@@ -165,9 +203,18 @@ void loop() {
   Serial.print("output_A:"); Serial.print(outputA);  Serial.print(",");
   Serial.print("setP_B:");  Serial.print(setpointB); Serial.print(",");
   Serial.print("input_B:"); Serial.print(inputB);    Serial.print(",");
-  Serial.print("output_B:"); Serial.println(outputB);  
+  Serial.print("output_B:"); Serial.println(outputB);
+
+  WebSerial.print("setP_A:");  WebSerial.print(setpointA); WebSerial.print(",");
+  WebSerial.print("input_A:"); WebSerial.print(inputA);    WebSerial.print(",");
+  WebSerial.print("output_A:"); WebSerial.print(outputA);  WebSerial.print(",");
+  WebSerial.print("setP_B:");  WebSerial.print(setpointB); WebSerial.print(",");
+  WebSerial.print("input_B:"); WebSerial.print(inputB);    WebSerial.print(",");
+  WebSerial.print("output_B:"); WebSerial.println(outputB);
 
   measure_battery();
+
+  WebSerial.loop();
 
   delay(50);
 }
